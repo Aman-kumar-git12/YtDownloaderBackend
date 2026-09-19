@@ -1,20 +1,10 @@
 import yt_dlp
 import os
+from core.yt_helper import extract_info_safe, get_base_ydl_opts
 
 def fetch_video_resolutions(url):
-    info_opts = {
-        'cookiefile': os.path.join(os.path.dirname(__file__), 'youtube_cookies.txt'),
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        },
-        'quiet': True,
-        'no_warnings': True,
-        'noprogress': True
-    }
+    info = extract_info_safe(url, download=False)
     
-    with yt_dlp.YoutubeDL(info_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-        
     title = info.get('title', 'Unknown Title')
     formats = info.get('formats', [])
     
@@ -59,28 +49,21 @@ def download_video(url, resolution_str, progress_hook=None):
     out_dir = os.path.join(os.path.dirname(__file__), '..', 'downloads')
     os.makedirs(out_dir, exist_ok=True)
     
-    ydl_opts = {
+    extra = {
         'format': format_selector,
         'merge_output_format': 'mp4',
         'outtmpl': os.path.join(out_dir, '%(title)s_%(height)sp.%(ext)s'),
-        'cookiefile': os.path.join(os.path.dirname(__file__), 'youtube_cookies.txt'),
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        },
-        'quiet': True,
-        'no_warnings': True,
-        'noprogress': True
     }
-    
     if progress_hook:
-        ydl_opts['progress_hooks'] = [progress_hook]
+        extra['progress_hooks'] = [progress_hook]
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        if info.get('requested_downloads'):
-            filepath = info['requested_downloads'][0]['filepath']
-            if os.path.exists(filepath):
-                return os.path.basename(filepath)
+    info = extract_info_safe(url, download=True, extra_opts=extra)
+    if info.get('requested_downloads'):
+        filepath = info['requested_downloads'][0]['filepath']
+        if os.path.exists(filepath):
+            return os.path.basename(filepath)
+    opts = get_base_ydl_opts(extra)
+    with yt_dlp.YoutubeDL(opts) as ydl:
         filename = ydl.prepare_filename(info)
         return os.path.basename(filename)
 

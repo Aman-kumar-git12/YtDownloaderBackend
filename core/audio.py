@@ -1,19 +1,9 @@
 import yt_dlp
 import os
+from core.yt_helper import extract_info_safe, get_base_ydl_opts
 
 def fetch_audio_formats(url):
-    info_opts = {
-        'cookiefile': os.path.join(os.path.dirname(__file__), 'youtube_cookies.txt'),
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        },
-        'quiet': True,
-        'no_warnings': True,
-        'noprogress': True
-    }
-    
-    with yt_dlp.YoutubeDL(info_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+    info = extract_info_safe(url, download=False)
         
     title = info.get('title', 'Unknown Title')
     duration = info.get('duration') or 0
@@ -47,29 +37,21 @@ def download_audio(url, target_format, progress_hook=None):
     out_dir = os.path.join(os.path.dirname(__file__), '..', 'downloads')
     os.makedirs(out_dir, exist_ok=True)
     
-    ydl_opts = {
+    extra = {
         'format': 'bestaudio/best',
         'outtmpl': os.path.join(out_dir, '%(title)s.%(ext)s'),
-        'cookiefile': os.path.join(os.path.dirname(__file__), 'youtube_cookies.txt'),
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        },
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': target_format,
             'preferredquality': '192',
         }],
-        'quiet': True,
-        'no_warnings': True,
-        'noprogress': True
     }
-    
     if progress_hook:
-        ydl_opts['progress_hooks'] = [progress_hook]
+        extra['progress_hooks'] = [progress_hook]
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        # Determine converted filename (base title + target extension)
+    info = extract_info_safe(url, download=True, extra_opts=extra)
+    opts = get_base_ydl_opts(extra)
+    with yt_dlp.YoutubeDL(opts) as ydl:
         base = os.path.splitext(os.path.basename(ydl.prepare_filename(info)))[0]
         final_filename = f"{base}.{target_format}"
         final_filepath = os.path.join(out_dir, final_filename)

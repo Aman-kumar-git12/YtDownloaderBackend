@@ -1,19 +1,10 @@
 import yt_dlp
 import os
 from datetime import timedelta
+from core.yt_helper import extract_info_safe
 
 def fetch_metadata(url):
-    info_opts = {
-        'cookiefile': os.path.join(os.path.dirname(__file__), 'youtube_cookies.txt'),
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        },
-        'quiet': True,
-        'no_warnings': True
-    }
-    
-    with yt_dlp.YoutubeDL(info_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+    info = extract_info_safe(url, download=False)
         
     duration_sec = info.get('duration', 0)
     duration_str = str(timedelta(seconds=duration_sec))
