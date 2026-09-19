@@ -1,4 +1,5 @@
 import os
+import shutil
 import urllib.parse
 
 # ─── Load .env BEFORE anything else ───
@@ -22,6 +23,7 @@ from core.metadata import fetch_metadata
 from core.video import fetch_video_resolutions, download_video
 from core.audio import fetch_audio_formats, download_audio
 from core.thumbnail import fetch_thumbnail_options, download_thumbnail
+import yt_dlp
 
 app = FastAPI(title="YouTube Downloader API")
 
@@ -51,6 +53,19 @@ class DownloadRequest(BaseModel):
     task_id: str = ""
 
 download_progress = {}
+
+
+@app.get("/health")
+def health_check():
+    """Report the deployment dependencies needed for reliable downloads."""
+    runtimes = [name for name in ("node", "deno", "bun", "qjs", "quickjs") if shutil.which(name)]
+    dependencies = {
+        "ffmpeg": bool(shutil.which("ffmpeg")),
+        "javascript_runtime": runtimes[0] if runtimes else None,
+        "yt_dlp_version": yt_dlp.version.__version__,
+    }
+    healthy = dependencies["ffmpeg"] and dependencies["javascript_runtime"]
+    return {"status": "ok" if healthy else "degraded", "dependencies": dependencies}
 
 def make_progress_hook(task_id: str):
     def hook(d):
@@ -170,13 +185,19 @@ def dl_audio(req: DownloadRequest):
 @app.post("/api/download/thumbnail")
 def dl_thumbnail(req: DownloadRequest):
     try:
+        if req.task_id:
+            download_progress[req.task_id] = {"status": "downloading", "percent": 0}
         success, filepath = download_thumbnail(req.url, req.target, req.title)
         if success and filepath:
             fn = os.path.basename(filepath)
+            if req.task_id:
+                download_progress[req.task_id] = {"status": "completed", "percent": 100}
             print(f"🎉 [THUMBNAIL DOWNLOAD SUCCESS] File ready: '{fn}'")
             return {"success": True, "filename": fn}
         raise Exception("Thumbnail download failed")
     except Exception as e:
+        if req.task_id:
+            download_progress[req.task_id] = {"status": "error", "error": str(e)}
         print(f"❌ [THUMBNAIL DOWNLOAD ERROR] {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -184,8 +205,10 @@ def dl_thumbnail(req: DownloadRequest):
 def serve_file(filename: str):
     """Serve a downloaded file to the browser for saving to device."""
     decoded = urllib.parse.unquote(filename)
+    if not decoded or os.path.basename(decoded) != decoded:
+        raise HTTPException(status_code=400, detail="Invalid filename")
     filepath = os.path.join(DOWNLOADS_DIR, decoded)
-    if not os.path.exists(filepath):
+    if not os.path.isfile(filepath):
         print(f"❌ [FILE SERVE ERROR] File not found: '{decoded}'")
         raise HTTPException(status_code=404, detail="File not found")
     print(f"📦 [FILE SERVED SUCCESS] Delivered to browser: '{decoded}'")

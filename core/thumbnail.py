@@ -67,7 +67,7 @@ def download_thumbnail(target_url, target_res, title):
     safe_title = "".join([c for c in title if c.isalpha() or c.isdigit() or c==' ']).rstrip()
     filename = os.path.join(out_dir, f"{safe_title}_{target_res}.jpg")
     
-    response = requests.get(target_url)
+    response = requests.get(target_url, timeout=20)
     if response.status_code == 200:
         with open(filename, 'wb') as f:
             f.write(response.content)

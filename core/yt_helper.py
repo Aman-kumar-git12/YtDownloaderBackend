@@ -2,7 +2,10 @@ import os
 import yt_dlp
 
 def get_base_ydl_opts(extra_opts=None):
-    cookie_path = os.path.join(os.path.dirname(__file__), 'youtube_cookies.txt')
+    cookie_path = os.getenv(
+        'YOUTUBE_COOKIE_FILE',
+        os.path.join(os.path.dirname(__file__), 'youtube_cookies.txt'),
+    )
     opts = {
         'quiet': True,
         'no_warnings': True,
