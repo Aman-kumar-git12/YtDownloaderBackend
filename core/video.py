@@ -8,7 +8,8 @@ def fetch_video_resolutions(url):
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         },
         'quiet': True,
-        'no_warnings': True
+        'no_warnings': True,
+        'noprogress': True
     }
     
     with yt_dlp.YoutubeDL(info_opts) as ydl:
@@ -50,11 +51,11 @@ def fetch_video_resolutions(url):
         "resolutions": resolutions
     }
 
-def download_video(url, resolution_str):
-    # resolution_str should be something like "1080" (without the 'p')
+def download_video(url, resolution_str, progress_hook=None):
+    # resolution_str should be something like "1080" or "1080p"
     resolution = resolution_str.replace("p", "")
     
-    format_selector = f'bestvideo[height={resolution}]+bestaudio/best'
+    format_selector = f'bestvideo[height<={resolution}]+bestaudio/best[height<={resolution}]/best'
     out_dir = os.path.join(os.path.dirname(__file__), '..', 'downloads')
     os.makedirs(out_dir, exist_ok=True)
     
@@ -67,16 +68,21 @@ def download_video(url, resolution_str):
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         },
         'quiet': True,
-        'no_warnings': True
+        'no_warnings': True,
+        'noprogress': True
     }
     
+    if progress_hook:
+        ydl_opts['progress_hooks'] = [progress_hook]
+
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
-        # Get the final filepath after merging/post-processing
         if info.get('requested_downloads'):
             filepath = info['requested_downloads'][0]['filepath']
-            return os.path.basename(filepath)
-        return None
+            if os.path.exists(filepath):
+                return os.path.basename(filepath)
+        filename = ydl.prepare_filename(info)
+        return os.path.basename(filename)
 
 def interactive_download(url):
     print("\nFetching video information safely...")
