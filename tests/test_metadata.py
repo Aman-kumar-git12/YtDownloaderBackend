@@ -38,6 +38,8 @@ def test_keeps_zero_counts_and_formats_values(monkeypatch):
     assert data["privacy"] == "Public"
     assert data["age_restricted"] is True
     assert data["chapters_preview"] == ["0:01:01: Intro"]
+    assert data["chapters"] == [{"start": 61, "title": "Intro"}]
+    assert data["description"] == "" and data["max_height"] is None
 
 
 def test_format_upload_date_rejects_garbage():

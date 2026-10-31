@@ -50,6 +50,15 @@ def fetch_metadata(url):
         "likes": info.get('like_count'),
         "comments": info.get('comment_count'),
         "description_snippet": desc_snippet,
+        "description": desc[:5000],
+        "chapters": [
+            {"start": int(chap.get('start_time') or 0), "title": chap.get('title') or 'Untitled'}
+            for chap in chapters[:100]
+        ],
+        "category": (info.get('categories') or [None])[0],
+        "max_height": max((f.get('height') or 0 for f in info.get('formats') or []), default=0) or None,
+        "fps": info.get('fps'),
+        "language": info.get('language'),
         "tags": info.get('tags') or [],
         "categories": info.get('categories') or [],
         "privacy": (info.get('availability') or 'unknown').replace('_', ' ').capitalize(),
