@@ -81,3 +81,27 @@ def test_read_only_cookie_file_is_copied_somewhere_writable(tmp_path, monkeypatc
     assert cookiefile != str(secret)
     assert os.access(cookiefile, os.W_OK)
     assert open(cookiefile).read() == secret.read_text()
+
+
+def test_concurrent_lookups_for_one_video_share_a_single_extraction(monkeypatch):
+    import threading
+    import time as _time
+    from core import yt_helper
+
+    calls = []
+
+    def slow_extract(url, download, extra_opts):
+        calls.append(url)
+        _time.sleep(0.2)
+        return {"id": "x", "title": "T"}
+
+    monkeypatch.setattr(yt_helper, "_extract_with_fallbacks", slow_extract)
+    monkeypatch.setattr(yt_helper, "_info_cache", {})
+    results = []
+    threads = [threading.Thread(target=lambda: results.append(yt_helper.extract_info_safe("https://youtu.be/share")))
+               for _ in range(5)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(calls) == 1 and len(results) == 5

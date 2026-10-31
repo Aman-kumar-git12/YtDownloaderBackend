@@ -12,9 +12,31 @@ from core.errors import UserFacingError
 # Metadata lookups are cached so switching tabs (or starting a download) doesn't
 # re-run a slow yt-dlp extraction and trigger YouTube's bot checks.
 INFO_CACHE_TTL = int(os.getenv('INFO_CACHE_TTL_SECONDS', 300))
-INFO_CACHE_MAX = 50
+INFO_CACHE_MAX = int(os.getenv('INFO_CACHE_MAX', 20))  # each entry holds a full info dict (~1 MB)
 _info_cache = {}
 _info_cache_lock = threading.Lock()
+
+# Each yt-dlp lookup can start a Node.js helper (~100 MB). On a 512 MB server, a page
+# that asks for 5 things about one video at once used to run 5 lookups and get killed
+# for running out of memory. Now requests for the same video share one lookup, and
+# only a few lookups run at the same time; the rest wait their turn.
+LOOKUP_SLOTS = threading.BoundedSemaphore(int(os.getenv('MAX_CONCURRENT_LOOKUPS', 2)))
+_url_locks = {}
+_url_locks_guard = threading.Lock()
+
+def _lock_for(url):
+    with _url_locks_guard:
+        if len(_url_locks) > 200:
+            for key in [k for k, lock in _url_locks.items() if not lock.locked()]:
+                del _url_locks[key]
+        return _url_locks.setdefault(url, threading.Lock())
+
+def _cached(url):
+    with _info_cache_lock:
+        entry = _info_cache.get(url)
+        if entry and time.time() - entry[0] < INFO_CACHE_TTL:
+            return entry[1]
+    return None
 
 TEMP_SUFFIXES = ('.part', '.ytdl', '.temp', '.tmp')
 
@@ -76,16 +98,28 @@ def get_base_ydl_opts(extra_opts=None, use_cookies=True):
 def extract_info_safe(url, download=False, extra_opts=None):
     cacheable = not download and not extra_opts
     if cacheable:
-        with _info_cache_lock:
-            entry = _info_cache.get(url)
-            if entry and time.time() - entry[0] < INFO_CACHE_TTL:
-                return entry[1]
+        info = _cached(url)
+        if info:
+            return info
+        # Only one lookup per video at a time; later callers get its cached result
+        with _lock_for(url):
+            info = _cached(url)
+            if info:
+                return info
+            return _lookup(url, download, extra_opts, cacheable)
 
     if download:
         # Check what the link points to before downloading anything (usually cached)
         extract_info_safe(url)
+    return _lookup(url, download, extra_opts, cacheable)
 
-    info = _extract_with_fallbacks(url, download, extra_opts)
+def _lookup(url, download, extra_opts, cacheable):
+    if download:
+        # Downloads are already limited by the job queue
+        info = _extract_with_fallbacks(url, download, extra_opts)
+    else:
+        with LOOKUP_SLOTS:
+            info = _extract_with_fallbacks(url, download, extra_opts)
     if info and info.get('_type') in ('playlist', 'multi_video'):
         raise UserFacingError("Playlists and channels aren't supported. Paste a link to a single video.")
 
@@ -196,7 +230,7 @@ def extract_tab(url, limit, approximate_dates=False):
     opts = get_base_ydl_opts({'extract_flat': True, 'noplaylist': False, 'playlistend': limit})
     if approximate_dates:
         opts['extractor_args'] = {'youtubetab': {'approximate_date': ['']}}
-    with yt_dlp.YoutubeDL(opts) as ydl:
+    with LOOKUP_SLOTS, yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
     return info, [e for e in (info.get('entries') or []) if e]
 
