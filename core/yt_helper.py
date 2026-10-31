@@ -1,5 +1,16 @@
 import os
+import threading
+import time
 import yt_dlp
+
+# Metadata lookups are cached so switching tabs (or starting a download) doesn't
+# re-run a slow yt-dlp extraction and trigger YouTube's bot checks.
+INFO_CACHE_TTL = int(os.getenv('INFO_CACHE_TTL_SECONDS', 300))
+INFO_CACHE_MAX = 50
+_info_cache = {}
+_info_cache_lock = threading.Lock()
+
+TEMP_SUFFIXES = ('.part', '.ytdl', '.temp', '.tmp')
 
 def get_base_ydl_opts(extra_opts=None, use_cookies=True):
     opts = {
@@ -41,6 +52,35 @@ def get_base_ydl_opts(extra_opts=None, use_cookies=True):
     return opts
 
 def extract_info_safe(url, download=False, extra_opts=None):
+    cacheable = not download and not extra_opts
+    if cacheable:
+        with _info_cache_lock:
+            entry = _info_cache.get(url)
+            if entry and time.time() - entry[0] < INFO_CACHE_TTL:
+                return entry[1]
+
+    info = _extract_with_fallbacks(url, download, extra_opts)
+
+    if cacheable and info:
+        with _info_cache_lock:
+            if len(_info_cache) >= INFO_CACHE_MAX:
+                oldest = min(_info_cache, key=lambda k: _info_cache[k][0])
+                del _info_cache[oldest]
+            _info_cache[url] = (time.time(), info)
+    return info
+
+def find_output_file(out_dir):
+    """Return the finished file yt-dlp left in a job folder (ignores partial/temp files)."""
+    files = [
+        os.path.join(out_dir, name) for name in os.listdir(out_dir)
+        if not name.startswith('.') and not name.endswith(TEMP_SUFFIXES)
+    ]
+    files = [f for f in files if os.path.isfile(f)]
+    if not files:
+        raise RuntimeError("Download finished but no output file was produced")
+    return max(files, key=os.path.getmtime)
+
+def _extract_with_fallbacks(url, download, extra_opts):
     # Verified Working client combinations for cloud/datacenter IPs
     client_combos = [
         ['mweb', 'android'],

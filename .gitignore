@@ -1,4 +1,11 @@
 __pycache__/
 *.pyc
+.pytest_cache/
+.venv/
 downloads/
 .env
+
+# YouTube session cookies — never commit these
+core/youtube_cookies.txt
+core/env_cookies.txt
+*cookies*.json

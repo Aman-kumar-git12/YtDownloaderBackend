@@ -1,7 +1,37 @@
+import os
 import requests
 import sys
+import time
 
 BASE_URL = "http://127.0.0.1:8001"
+
+def run_download(kind, url, target):
+    """Start a background download job, show progress, then save the file to the current folder."""
+    resp = requests.post(f"{BASE_URL}/api/download/{kind}", json={"url": url, "target": target})
+    if not resp.ok:
+        print("Download failed:", resp.json().get("detail"))
+        return None
+    task_id = resp.json()["task_id"]
+
+    while True:
+        time.sleep(1)
+        job = requests.get(f"{BASE_URL}/api/download/progress/{task_id}").json()
+        status = job.get("status")
+        if status == "completed":
+            break
+        if status == "error" or status is None:
+            print(f"\nDownload failed: {job.get('error') or job.get('detail')}")
+            return None
+        print(f"\r⏳ {status} {job.get('percent', 0)}% {job.get('speed') or ''}   ", end="", flush=True)
+
+    filepath = os.path.abspath(os.path.basename(job["filename"]))
+    with requests.get(f"{BASE_URL}/api/files/{task_id}", stream=True) as file_resp:
+        file_resp.raise_for_status()
+        with open(filepath, "wb") as f:
+            for chunk in file_resp.iter_content(1024 * 1024):
+                f.write(chunk)
+    print()
+    return filepath
 
 def get_metadata(url):
     print("\nFetching comprehensive video metadata via API...")
@@ -22,18 +52,18 @@ def get_metadata(url):
         print(f"👤 Channel      : {data['channel']} ({data['channel_url']})")
         
         subs = data['subscribers']
-        print(f"👥 Subscribers  : {subs:,}" if subs else "👥 Subscribers  : Hidden/Unknown")
-        print(f"📅 Upload Date  : {data['upload_date']} (YYYYMMDD)")
-        print(f"⏱️  Duration     : {data['duration']}")
+        print(f"👥 Subscribers  : {subs:,}" if subs is not None else "👥 Subscribers  : Hidden/Unknown")
+        print(f"📅 Upload Date  : {data['upload_date'] or 'Unknown'}")
+        print(f"⏱️  Duration     : {data['duration'] or 'Unknown'}")
         
         views = data['views']
-        print(f"👁️  Views        : {views:,}" if views else "👁️  Views        : Hidden")
+        print(f"👁️  Views        : {views:,}" if views is not None else "👁️  Views        : Hidden")
         
         likes = data['likes']
-        print(f"👍 Likes        : {likes:,}" if likes else "👍 Likes        : Hidden/Unknown")
+        print(f"👍 Likes        : {likes:,}" if likes is not None else "👍 Likes        : Hidden/Unknown")
         
         comments = data['comments']
-        print(f"💬 Comments     : {comments:,}" if comments else "💬 Comments     : Hidden/Unknown")
+        print(f"💬 Comments     : {comments:,}" if comments is not None else "💬 Comments     : Hidden/Unknown")
         print(f"📖 Description  : {data['description_snippet']}")
         
         tags = data['tags']
@@ -104,12 +134,9 @@ def get_video(url):
             target_res = res_list[0]
             
         print(f"\nCommanding API to download {target_res}...")
-        dl_resp = requests.post(f"{BASE_URL}/api/download/video", json={"url": url, "target": target_res}).json()
-        
-        if dl_resp.get("success"):
-            print("\n🎉 HD Video Download Completed Successfully!")
-        else:
-            print("Download failed.")
+        filepath = run_download("video", url, target_res)
+        if filepath:
+            print(f"\n🎉 HD Video Download Completed Successfully! Saved at: {filepath}")
             
     except Exception as e:
         print("\n[API Error] Is the FastAPI server running on port 8001?")
@@ -154,12 +181,9 @@ def get_audio(url):
             target_format = "MP3"
             
         print(f"\nCommanding API to download and convert to {target_format}...")
-        dl_resp = requests.post(f"{BASE_URL}/api/download/audio", json={"url": url, "target": target_format}).json()
-        
-        if dl_resp.get("success"):
-            print(f"\n🎉 Audio Download Completed Successfully! Saved as {target_format}")
-        else:
-            print("Download failed.")
+        filepath = run_download("audio", url, target_format)
+        if filepath:
+            print(f"\n🎉 Audio Download Completed Successfully! Saved at: {filepath}")
             
     except Exception as e:
         print("\n[API Error] Is the FastAPI server running on port 8001?")
@@ -177,7 +201,6 @@ def get_thumbnail(url):
         print(f"\nConnected to: {data['title']}")
         
         resolutions = data['resolutions']
-        urls = data['urls']
         
         if not resolutions:
             print("No high-quality thumbnails found.")
@@ -207,20 +230,10 @@ def get_thumbnail(url):
         except ValueError:
             target_res = res_list[0]
             
-        target_url = urls[target_res]
-        
         print(f"\nCommanding API to download {target_res} thumbnail...")
-        dl_resp = requests.post(f"{BASE_URL}/api/download/thumbnail", json={
-            "url": target_url, 
-            "target": target_res,
-            "title": data['title']
-        }).json()
-        
-        if dl_resp.get("success"):
-            filepath = dl_resp.get("filepath")
+        filepath = run_download("thumbnail", url, target_res)
+        if filepath:
             print(f"🎉 Thumbnail successfully saved at: {filepath}")
-        else:
-            print("Download failed.")
             
     except Exception as e:
         print("\n[API Error] Is the FastAPI server running on port 8001?")

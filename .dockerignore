@@ -1,5 +1,10 @@
 __pycache__/
 *.py[cod]
+.pytest_cache/
+.venv/
+.git/
 .env
 downloads/
+tests/
 core/youtube_cookies.txt
+core/env_cookies.txt

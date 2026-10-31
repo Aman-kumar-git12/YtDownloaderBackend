@@ -1,6 +1,6 @@
 import os
 import shutil
-import urllib.parse
+from contextlib import asynccontextmanager
 
 # ─── Load .env BEFORE anything else ───
 env_path = os.path.join(os.path.dirname(__file__), '.env')
@@ -13,21 +13,43 @@ if os.path.exists(env_path):
                 os.environ.setdefault(key.strip(), val.strip())
 
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from starlette.background import BackgroundTask
 import uvicorn
 
 from core.metadata import fetch_metadata
 from core.video import fetch_video_resolutions, download_video
 from core.audio import fetch_audio_formats, download_audio
 from core.thumbnail import fetch_thumbnail_options, download_thumbnail
+from core.validators import is_youtube_url, is_valid_target
+from core.rate_limit import RateLimiter
+from core.jobs import JobManager, QueueFullError
 import yt_dlp
 
-app = FastAPI(title="YouTube Downloader API")
-
 DOWNLOADS_DIR = os.path.join(os.path.dirname(__file__), 'downloads')
+
+# ─── Limits (all overridable from .env) ───
+lookup_limit = RateLimiter(int(os.getenv("RATE_LIMIT_LOOKUPS_PER_MINUTE", 30)), 60)
+download_limit = RateLimiter(int(os.getenv("RATE_LIMIT_DOWNLOADS_PER_HOUR", 20)), 3600)
+jobs = JobManager(
+    DOWNLOADS_DIR,
+    max_workers=int(os.getenv("MAX_CONCURRENT_DOWNLOADS", 2)),
+    max_pending=int(os.getenv("MAX_PENDING_DOWNLOADS", 10)),
+    ttl_seconds=int(os.getenv("FILE_TTL_SECONDS", 900)),
+)
+
+
+@asynccontextmanager
+async def lifespan(app):
+    jobs.cleanup()
+    jobs.start_janitor()
+    yield
+
+
+app = FastAPI(title="YouTube Downloader API", lifespan=lifespan)
 
 # ─── CORS: read frontend URL from env ───
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
@@ -43,16 +65,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-class URLRequest(BaseModel):
-    url: str
-
 class DownloadRequest(BaseModel):
     url: str
     target: str
-    title: str = ""
-    task_id: str = ""
 
-download_progress = {}
+
+def require_youtube_url(url: str):
+    if not is_youtube_url(url):
+        raise HTTPException(status_code=400, detail="Only YouTube links (youtube.com / youtu.be) are supported.")
+    return url.strip()
 
 
 @app.get("/health")
@@ -67,155 +88,86 @@ def health_check():
     healthy = dependencies["ffmpeg"] and dependencies["javascript_runtime"]
     return {"status": "ok" if healthy else "degraded", "dependencies": dependencies}
 
-def make_progress_hook(task_id: str):
-    def hook(d):
-        if not task_id:
-            return
-        status = d.get('status')
-        if status == 'downloading':
-            total = d.get('total_bytes') or d.get('total_bytes_estimate') or 0
-            downloaded = d.get('downloaded_bytes') or 0
-            pct = round((downloaded / total * 100), 1) if total > 0 else 0
-            speed = d.get('speed') or 0
-            speed_str = f"{speed / (1024*1024):.1f} MB/s" if speed > 0 else ""
-            eta = d.get('eta')
-            eta_str = f"{eta}s" if eta is not None else ""
-            download_progress[task_id] = {
-                "status": "downloading",
-                "percent": pct,
-                "speed": speed_str,
-                "eta": eta_str,
-                "elapsed": round(d.get('elapsed', 0), 1)
-            }
-        elif status == 'finished':
-            download_progress[task_id] = {
-                "status": "processing",
-                "percent": 99.0,
-                "speed": "Merging/Processing...",
-                "eta": "converting",
-                "elapsed": round(d.get('elapsed', 0), 1)
-            }
-    return hook
 
-@app.get("/api/download/progress/{task_id}")
-def get_download_progress(task_id: str):
-    return download_progress.get(task_id, {"status": "starting", "percent": 0})
+def run_lookup(label, fetch, url, count_key):
+    url = require_youtube_url(url)
+    try:
+        data = fetch(url)
+        print(f"✅ [{label} SUCCESS] Fetched {len(data.get(count_key) or {})} options for: '{data.get('title', 'Video')}'")
+        return {"success": True, "data": data}
+    except Exception as e:
+        print(f"❌ [{label} ERROR] {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/metadata")
+@app.get("/api/metadata", dependencies=[Depends(lookup_limit)])
 def get_metadata(url: str):
+    url = require_youtube_url(url)
     try:
         data = fetch_metadata(url)
-        title = data.get("title", "Video")
-        print(f"✅ [METADATA SUCCESS] Fetched metadata for: '{title}'")
+        print(f"✅ [METADATA SUCCESS] Fetched metadata for: '{data.get('title', 'Video')}'")
         return {"success": True, "data": data}
     except Exception as e:
         print(f"❌ [METADATA ERROR] {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/video/resolutions")
+@app.get("/api/video/resolutions", dependencies=[Depends(lookup_limit)])
 def get_video_res(url: str):
-    try:
-        data = fetch_video_resolutions(url)
-        title = data.get("title", "Video")
-        res_count = len(data.get("resolutions", {}))
-        print(f"✅ [VIDEO RESOLUTIONS SUCCESS] Fetched {res_count} resolutions for: '{title}'")
-        return {"success": True, "data": data}
-    except Exception as e:
-        print(f"❌ [VIDEO RESOLUTIONS ERROR] {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return run_lookup("VIDEO RESOLUTIONS", fetch_video_resolutions, url, "resolutions")
 
-@app.get("/api/audio/formats")
+@app.get("/api/audio/formats", dependencies=[Depends(lookup_limit)])
 def get_audio_fmt(url: str):
-    try:
-        data = fetch_audio_formats(url)
-        title = data.get("title", "Video")
-        fmt_count = len(data.get("formats", {}))
-        print(f"✅ [AUDIO FORMATS SUCCESS] Fetched {fmt_count} audio formats for: '{title}'")
-        return {"success": True, "data": data}
-    except Exception as e:
-        print(f"❌ [AUDIO FORMATS ERROR] {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return run_lookup("AUDIO FORMATS", fetch_audio_formats, url, "formats")
 
-@app.get("/api/thumbnail/resolutions")
+@app.get("/api/thumbnail/resolutions", dependencies=[Depends(lookup_limit)])
 def get_thumb_res(url: str):
-    try:
-        data = fetch_thumbnail_options(url)
-        title = data.get("title", "Video")
-        count = len(data.get("resolutions", {}))
-        print(f"✅ [THUMBNAIL SUCCESS] Fetched {count} thumbnail sizes for: '{title}'")
-        return {"success": True, "data": data}
-    except Exception as e:
-        print(f"❌ [THUMBNAIL ERROR] {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return run_lookup("THUMBNAIL", fetch_thumbnail_options, url, "resolutions")
 
-@app.post("/api/download/video")
-def dl_video(req: DownloadRequest):
-    try:
-        hook = make_progress_hook(req.task_id) if req.task_id else None
-        filename = download_video(req.url, req.target, progress_hook=hook)
-        if filename:
-            if req.task_id:
-                download_progress[req.task_id] = {"status": "completed", "percent": 100}
-            print(f"🎉 [VIDEO DOWNLOAD SUCCESS] File ready: '{filename}' ({req.target})")
-            return {"success": True, "filename": filename}
-        raise Exception("Download completed but could not determine filename")
-    except Exception as e:
-        if req.task_id:
-            download_progress[req.task_id] = {"status": "error", "error": str(e)}
-        print(f"❌ [VIDEO DOWNLOAD ERROR] {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/download/audio")
-def dl_audio(req: DownloadRequest):
-    try:
-        hook = make_progress_hook(req.task_id) if req.task_id else None
-        filename = download_audio(req.url, req.target, progress_hook=hook)
-        if filename:
-            if req.task_id:
-                download_progress[req.task_id] = {"status": "completed", "percent": 100}
-            print(f"🎉 [AUDIO DOWNLOAD SUCCESS] File ready: '{filename}' ({req.target})")
-            return {"success": True, "filename": filename}
-        raise Exception("Download completed but could not determine filename")
-    except Exception as e:
-        if req.task_id:
-            download_progress[req.task_id] = {"status": "error", "error": str(e)}
-        print(f"❌ [AUDIO DOWNLOAD ERROR] {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+# ─── Downloads run as background jobs ───
+# POST /api/download/<kind>          -> {"task_id": ...} immediately
+# GET  /api/download/progress/<id>   -> poll until status is "completed" or "error"
+# GET  /api/files/<id>               -> the file (deleted from the server once sent)
 
-@app.post("/api/download/thumbnail")
-def dl_thumbnail(req: DownloadRequest):
-    try:
-        if req.task_id:
-            download_progress[req.task_id] = {"status": "downloading", "percent": 0}
-        success, filepath = download_thumbnail(req.url, req.target, req.title)
-        if success and filepath:
-            fn = os.path.basename(filepath)
-            if req.task_id:
-                download_progress[req.task_id] = {"status": "completed", "percent": 100}
-            print(f"🎉 [THUMBNAIL DOWNLOAD SUCCESS] File ready: '{fn}'")
-            return {"success": True, "filename": fn}
-        raise Exception("Thumbnail download failed")
-    except Exception as e:
-        if req.task_id:
-            download_progress[req.task_id] = {"status": "error", "error": str(e)}
-        print(f"❌ [THUMBNAIL DOWNLOAD ERROR] {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+DOWNLOADERS = {
+    "video": lambda url, target: lambda out_dir, hook: download_video(url, target, out_dir, hook),
+    "audio": lambda url, target: lambda out_dir, hook: download_audio(url, target, out_dir, hook),
+    "thumbnail": lambda url, target: lambda out_dir, hook: download_thumbnail(url, target, out_dir),
+}
 
-@app.get("/api/files/{filename:path}")
-def serve_file(filename: str):
-    """Serve a downloaded file to the browser for saving to device."""
-    decoded = urllib.parse.unquote(filename)
-    if not decoded or os.path.basename(decoded) != decoded:
-        raise HTTPException(status_code=400, detail="Invalid filename")
-    filepath = os.path.join(DOWNLOADS_DIR, decoded)
-    if not os.path.isfile(filepath):
-        print(f"❌ [FILE SERVE ERROR] File not found: '{decoded}'")
-        raise HTTPException(status_code=404, detail="File not found")
-    print(f"📦 [FILE SERVED SUCCESS] Delivered to browser: '{decoded}'")
+@app.post("/api/download/{kind}", dependencies=[Depends(download_limit)])
+def start_download(kind: str, req: DownloadRequest):
+    if kind not in DOWNLOADERS:
+        raise HTTPException(status_code=404, detail="Unknown download type")
+    url = require_youtube_url(req.url)
+    target = req.target.strip()
+    if not is_valid_target(kind, target):
+        raise HTTPException(status_code=400, detail=f"Invalid {kind} option: '{target}'")
+    try:
+        task_id = jobs.submit(kind, DOWNLOADERS[kind](url, target))
+    except QueueFullError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    print(f"⏳ [{kind.upper()} DOWNLOAD QUEUED] {target} → task {task_id[:8]}")
+    return {"success": True, "task_id": task_id}
+
+@app.get("/api/download/progress/{task_id}")
+def get_download_progress(task_id: str):
+    job = jobs.public_view(task_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="This download has expired or does not exist.")
+    return job
+
+@app.get("/api/files/{task_id}")
+def serve_file(task_id: str):
+    """Send a finished download to the browser, then delete it from the server."""
+    job = jobs.get(task_id)
+    if not job or job["status"] != "completed" or not os.path.isfile(job["path"] or ""):
+        raise HTTPException(status_code=404, detail="File not found or already downloaded.")
+    print(f"📦 [FILE SERVED SUCCESS] Delivered to browser: '{job['filename']}'")
     return FileResponse(
-        filepath,
-        filename=decoded,
-        media_type='application/octet-stream'
+        job["path"],
+        filename=job["filename"],
+        media_type='application/octet-stream',
+        background=BackgroundTask(jobs.release, task_id),
     )
 
 if __name__ == "__main__":

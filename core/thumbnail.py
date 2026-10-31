@@ -1,131 +1,68 @@
-import yt_dlp
 import os
 import requests
 from core.yt_helper import extract_info_safe
+from core.validators import is_thumbnail_url
+
+MAX_THUMBNAIL_BYTES = 10 * 1024 * 1024
+IMAGE_EXTENSIONS = {'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/png': 'png'}
+
+def get_thumbnail_urls(info):
+    """Map resolution label -> thumbnail URL, largest first. Only YouTube image hosts are kept."""
+    thumbnails = [t for t in (info.get('thumbnails') or []) if is_thumbnail_url(t.get('url') or '')]
+
+    sized = [t for t in thumbnails if t.get('width') and t.get('height')]
+    sized.sort(key=lambda t: t['width'] * t['height'], reverse=True)
+
+    urls = {}
+    for t in sized:
+        urls.setdefault(f"{t['width']}x{t['height']}", t['url'])
+    if not urls:
+        for t in thumbnails:
+            urls.setdefault(str(t.get('id') or 'default'), t['url'])
+    return urls
 
 def fetch_thumbnail_options(url):
     info = extract_info_safe(url, download=False)
-        
-    title = info.get('title', 'Unknown Title')
-    thumbnails = info.get('thumbnails', [])
-    
-    valid_thumbnails = []
-    for t in thumbnails:
-        width = t.get('width')
-        height = t.get('height')
-        if width and height:
-            res_str = f"{width}x{height}"
-            sort_val = width * height
-            valid_thumbnails.append({
-                'resolution': res_str,
-                'url': t.get('url'),
-                'sort_val': sort_val
-            })
-            
-    valid_thumbnails.sort(key=lambda x: x['sort_val'], reverse=True)
-    
-    seen_res = set()
-    unique_thumbnails = []
-    for t in valid_thumbnails:
-        if t['resolution'] not in seen_res:
-            seen_res.add(t['resolution'])
-            unique_thumbnails.append(t)
-            
-    if not unique_thumbnails:
-        for t in thumbnails:
-            unique_thumbnails.append({
-                'resolution': t.get('id', 'Unknown'),
-                'url': t.get('url')
-            })
-            
-    # Compute sizes
+
     qualities_dict = {}
-    url_dict = {}
-    for t in unique_thumbnails:
-        res = t['resolution']
-        url_dict[res] = t['url']
+    for res, thumb_url in get_thumbnail_urls(info).items():
         try:
-            head_resp = requests.head(t['url'], timeout=3)
-            size_bytes = int(head_resp.headers.get('Content-Length', 0))
-            if size_bytes > 0:
-                qualities_dict[res] = f"{size_bytes / 1024:.1f} KB"
-            else:
-                qualities_dict[res] = "Unknown"
-        except:
+            head_resp = requests.head(thumb_url, timeout=3)
+            size_bytes = int(head_resp.headers.get('Content-Length') or 0)
+            qualities_dict[res] = f"{size_bytes / 1024:.1f} KB" if size_bytes > 0 else "Unknown"
+        except (requests.RequestException, ValueError):
             qualities_dict[res] = "Unknown"
-            
+
     return {
-        "title": title,
+        "title": info.get('title') or 'Unknown Title',
         "resolutions": qualities_dict,
-        "urls": url_dict
     }
 
-def download_thumbnail(target_url, target_res, title):
-    out_dir = os.path.join(os.path.dirname(__file__), '..', 'downloads')
-    os.makedirs(out_dir, exist_ok=True)
-    
-    safe_title = "".join([c for c in title if c.isalpha() or c.isdigit() or c==' ']).rstrip()
-    filename = os.path.join(out_dir, f"{safe_title}_{target_res}.jpg")
-    
-    response = requests.get(target_url, timeout=20)
-    if response.status_code == 200:
-        with open(filename, 'wb') as f:
-            f.write(response.content)
-        return True, filename
-    else:
-        return False, None
+def download_thumbnail(video_url, target_res, out_dir):
+    # The image URL is looked up server-side from the video, never taken from the
+    # client, so this endpoint can't be used to make the server fetch arbitrary URLs.
+    info = extract_info_safe(video_url, download=False)
+    thumb_url = get_thumbnail_urls(info).get(target_res)
+    if not thumb_url:
+        raise ValueError(f"Thumbnail size '{target_res}' is not available for this video")
 
-def interactive_thumbnail_download(url):
-    print("\nFetching thumbnail information safely...")
-    try:
-        data = fetch_thumbnail_options(url)
-        print(f"\nConnected to: {data['title']}")
-        
-        resolutions = data['resolutions']
-        urls = data['urls']
-        
-        if not resolutions:
-            print("No high-quality thumbnails found.")
-            return
-            
-        print("Calculating exact file sizes...")
-        print("\nFetched Thumbnail Qualities Dictionary:")
-        print(resolutions)
-        
-        print("\nAvailable Thumbnail Resolutions:")
-        res_list = list(resolutions.keys())
-        for i, res in enumerate(res_list):
-            size_str = resolutions[res]
-            if size_str != "Unknown":
-                print(f"[{i + 1}] {res} (~{size_str})")
-            else:
-                print(f"[{i + 1}] {res}")
-                
-        choice = input("\nEnter the number of the thumbnail you want to download: ")
-        
-        try:
-            choice_idx = int(choice) - 1
-            if 0 <= choice_idx < len(res_list):
-                target_res = res_list[choice_idx]
-            else:
-                print("Invalid choice. Defaulting to highest resolution.")
-                target_res = res_list[0]
-        except ValueError:
-            print("Invalid input. Defaulting to highest resolution.")
-            target_res = res_list[0]
-            
-        target_url = urls[target_res]
-        
-        print(f"\nDownloading {target_res} thumbnail...")
-        success, filepath = download_thumbnail(target_url, target_res, data['title'])
-        if success:
-            print(f"🎉 Thumbnail successfully saved as: {filepath}")
-        else:
-            print("Failed to download thumbnail.")
-            
-    except Exception as e:
-        print(f"\nExecution failed: {e}")
+    with requests.get(thumb_url, timeout=20, stream=True, allow_redirects=False) as response:
+        if response.status_code != 200:
+            raise RuntimeError(f"Thumbnail server returned HTTP {response.status_code}")
+        content_type = (response.headers.get('Content-Type') or '').split(';')[0].strip()
+        ext = IMAGE_EXTENSIONS.get(content_type)
+        if not ext:
+            raise RuntimeError(f"Unexpected thumbnail type '{content_type}'")
 
-if __name__ == "__main__":
-    link = input("Enter the YouTube Video URL: ")
-    interactive_thumbnail_download(link)
+        data = b''
+        for chunk in response.iter_content(64 * 1024):
+            data += chunk
+            if len(data) > MAX_THUMBNAIL_BYTES:
+                raise RuntimeError("Thumbnail is unexpectedly large")
+
+    title = info.get('title') or ''
+    safe_title = "".join(c for c in title if c.isalnum() or c in " -_").strip() or "thumbnail"
+    filepath = os.path.join(out_dir, f"{safe_title[:150]}_{target_res}.{ext}")
+    with open(filepath, 'wb') as f:
+        f.write(data)
+    return filepath
