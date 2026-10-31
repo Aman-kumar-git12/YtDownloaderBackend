@@ -27,6 +27,7 @@ from core.thumbnail import fetch_thumbnail_options, download_thumbnail
 from core.validators import is_youtube_url, is_valid_target
 from core.rate_limit import RateLimiter
 from core.jobs import JobManager, QueueFullError
+from core.yt_helper import cookie_status, recent_errors
 import yt_dlp
 
 DOWNLOADS_DIR = os.path.join(os.path.dirname(__file__), 'downloads')
@@ -87,7 +88,14 @@ def health_check():
         "yt_dlp_version": yt_dlp.version.__version__,
     }
     healthy = dependencies["ffmpeg"] and dependencies["javascript_runtime"]
-    return {"status": "ok" if healthy else "degraded", "dependencies": dependencies}
+    return {
+        "status": "ok" if healthy else "degraded",
+        "dependencies": dependencies,
+        "cookies": cookie_status(),
+        "proxy_configured": bool(os.getenv("YOUTUBE_PROXY")),
+        "trust_proxy": os.getenv("TRUST_PROXY") == "1",
+        "recent_youtube_errors": list(recent_errors),
+    }
 
 
 def run_lookup(label, fetch, url, count_key):

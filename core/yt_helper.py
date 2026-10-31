@@ -1,6 +1,8 @@
 import os
 import threading
 import time
+from collections import deque
+
 import yt_dlp
 
 # Metadata lookups are cached so switching tabs (or starting a download) doesn't
@@ -21,9 +23,9 @@ def get_base_ydl_opts(extra_opts=None, use_cookies=True):
         'noplaylist': True,
         # If the link is a playlist/channel, list it cheaply so it can be rejected below.
         'extract_flat': 'in_playlist',
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        }
+        'socket_timeout': 20,
+        'retries': 3,
+        'extractor_retries': 1,
     }
 
     # Support Proxy via environment variable (e.g. YOUTUBE_PROXY or HTTP_PROXY)
@@ -90,38 +92,56 @@ def find_output_file(out_dir):
         raise RuntimeError("Download finished but no output file was produced")
     return max(files, key=os.path.getmtime)
 
+# None = let yt-dlp pick its default clients, which return the full format list.
+# The forced combos only return a single low-quality stream but sometimes get
+# through when YouTube blocks the defaults on cloud IPs.
+CLIENT_COMBOS = [None, ['web_embedded', 'android'], ['mweb', 'android']]
+
+# Errors that no other client/cookie combination will fix
+PERMANENT_ERRORS = ('Video unavailable', 'Private video', 'has been removed',
+                    'members-only', 'Join this channel', 'not available in your country')
+
+recent_errors = deque(maxlen=10)
+
 def _extract_with_fallbacks(url, download, extra_opts):
-    # Verified Working client combinations for cloud/datacenter IPs
-    client_combos = [
-        ['mweb', 'android'],
-        ['web_embedded', 'android'],
-        ['android', 'mweb'],
-        ['web', 'mweb']
-    ]
+    has_cookies = 'cookiefile' in get_base_ydl_opts()
+    attempts = [(combo, True) for combo in CLIENT_COMBOS] if has_cookies else []
+    attempts += [(combo, False) for combo in CLIENT_COMBOS]
 
     last_err = None
-
-    # Step 1: Try with cookies (if provided)
-    for combo in client_combos:
-        opts = get_base_ydl_opts(extra_opts, use_cookies=True)
-        opts['extractor_args'] = {'youtube': {'player_client': combo}}
+    for combo, use_cookies in attempts:
+        opts = get_base_ydl_opts(extra_opts, use_cookies=use_cookies)
+        if combo:
+            opts['extractor_args'] = {'youtube': {'player_client': combo}}
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 return ydl.extract_info(url, download=download)
         except Exception as e:
             last_err = e
-            continue
-
-    # Step 2: Fallback WITHOUT cookies (bypasses expired/invalid cookie blocks on cloud IPs)
-    for combo in client_combos:
-        opts = get_base_ydl_opts(extra_opts, use_cookies=False)
-        opts['extractor_args'] = {'youtube': {'player_client': combo}}
-        try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                return ydl.extract_info(url, download=download)
-        except Exception as e:
-            last_err = e
-            continue
+            label = f"clients={combo or 'default'} cookies={'yes' if use_cookies else 'no'}"
+            recent_errors.append({"time": time.strftime('%H:%M:%S'), "attempt": label, "error": str(e)[:300]})
+            print(f"⚠️ [YT ATTEMPT FAILED] {label}: {str(e)[:200]}")
+            if any(msg in str(e) for msg in PERMANENT_ERRORS):
+                break
 
     if last_err:
         raise last_err
+
+def cookie_status():
+    """Describe the configured cookies without revealing them (shown on /health)."""
+    path = get_base_ydl_opts().get('cookiefile')
+    if not path:
+        return {"configured": False}
+    try:
+        with open(path) as f:
+            lines = [l for l in f if l.strip() and not l.startswith('#')]
+    except OSError as e:
+        return {"configured": True, "valid": False, "error": str(e)}
+    names = {l.split('\t')[5] for l in lines if len(l.split('\t')) == 7}
+    return {
+        "configured": True,
+        "source": "YOUTUBE_COOKIES_TEXT" if os.getenv('YOUTUBE_COOKIES_TEXT') else "file",
+        "valid_lines": sum(1 for l in lines if len(l.split('\t')) == 7),
+        "invalid_lines": sum(1 for l in lines if len(l.split('\t')) != 7),
+        "logged_in": bool({'LOGIN_INFO', '__Secure-3PSID'} & names),
+    }
