@@ -37,12 +37,17 @@ docker run -p 8001:8001 --env-file .env yt-backend
 | GET | `/api/metadata?url=` | Title, channel, stats, tags, chapters… |
 | GET | `/api/video/resolutions?url=` | Available resolutions with estimated sizes |
 | GET | `/api/audio/formats?url=` | MP3 / M4A / WAV / FLAC / AAC with estimated sizes |
-| GET | `/api/thumbnail/resolutions?url=` | Thumbnail sizes |
-| POST | `/api/download/{video\|audio\|thumbnail}` | Body `{"url", "target"}` → `{"task_id"}` |
+| GET | `/api/thumbnail/resolutions?url=` | Thumbnail sizes (with preview URLs) |
+| GET | `/api/subtitles?url=` | Uploaded subtitles in every language, plus auto-generated captions in the video's language |
+| POST | `/api/download/{video\|audio\|thumbnail\|subtitles}` | Body `{"url", "target"}`, plus optional `"start"`/`"end"` seconds to clip video or audio → `{"task_id"}` |
 | GET | `/api/download/progress/{task_id}` | `status` (`queued` → `downloading` → `processing` → `completed` / `error`), `percent`, `speed`, `filename`, `error` |
 | GET | `/api/files/{task_id}` | The finished file. **Deleted from the server after it's sent.** |
 
-Downloads run as background jobs, so long videos don't hit proxy request timeouts: start a job, poll progress, then fetch the file. `target` is a resolution like `720p`, an audio format like `mp3`, or a thumbnail size like `1280x720`.
+Downloads run as background jobs, so long videos don't hit proxy request timeouts: start a job, poll progress, then fetch the file. `target` is a resolution like `720p`, an audio format like `mp3`, a thumbnail size like `1280x720`, or a subtitle track like `en:manual:srt` / `en-orig:auto:vtt`. MP3, M4A and FLAC downloads get title/artist tags and the thumbnail as cover art.
+
+## Keep-awake on Render's free plan
+
+Render stops free services after 15 idle minutes. When `RENDER_EXTERNAL_URL` is set (Render sets it automatically), the server pings its own `/health` every 10 minutes so visitors don't wait for a cold start. One always-on service uses about 744 of the 750 free instance hours per month. Disable with `KEEP_ALIVE=0`.
 
 ## Safety limits
 

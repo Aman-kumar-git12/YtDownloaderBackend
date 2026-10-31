@@ -7,6 +7,7 @@ from collections import deque
 import yt_dlp
 
 from core import warp
+from core.errors import UserFacingError
 
 # Metadata lookups are cached so switching tabs (or starting a download) doesn't
 # re-run a slow yt-dlp extraction and trigger YouTube's bot checks.
@@ -86,7 +87,7 @@ def extract_info_safe(url, download=False, extra_opts=None):
 
     info = _extract_with_fallbacks(url, download, extra_opts)
     if info and info.get('_type') in ('playlist', 'multi_video'):
-        raise ValueError("Playlists and channels aren't supported. Please paste a link to a single video.")
+        raise UserFacingError("Playlists and channels aren't supported. Paste a link to a single video.")
 
     if cacheable and info:
         with _info_cache_lock:
@@ -160,3 +161,31 @@ def cookie_status():
         "invalid_lines": sum(1 for l in lines if len(l.split('\t')) != 7),
         "logged_in": bool({'LOGIN_INFO', '__Secure-3PSID'} & names),
     }
+
+
+def _clock(seconds):
+    seconds = int(seconds)
+    h, rest = divmod(seconds, 3600)
+    m, s = divmod(rest, 60)
+    return f"{h}h{m:02d}m{s:02d}s" if h else f"{m}m{s:02d}s"
+
+def apply_clip(url, extra, clip):
+    """Configure yt-dlp to download only clip=(start, end) seconds of the video."""
+    if not clip:
+        return
+    start, end = clip
+    duration = extract_info_safe(url).get('duration')
+    if duration and end > duration + 1:
+        raise UserFacingError("The clip ends after the video does. Pick an earlier end time.")
+    extra['download_ranges'] = yt_dlp.utils.download_range_func(None, [(start, end)])
+    # Cut exactly at the chosen times instead of the nearest keyframe
+    extra['force_keyframes_at_cuts'] = True
+
+def name_clip(path, clip):
+    """Add the clip range to the file name: 'Title_720p (1m20s-2m05s).mp4'."""
+    if not clip:
+        return path
+    base, ext = os.path.splitext(path)
+    new_path = f"{base} ({_clock(clip[0])}-{_clock(clip[1])}){ext}"
+    os.rename(path, new_path)
+    return new_path

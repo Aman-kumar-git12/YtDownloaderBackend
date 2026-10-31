@@ -16,6 +16,8 @@ if os.path.exists(env_path):
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from typing import Optional
+
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 import uvicorn
@@ -24,11 +26,12 @@ from core.metadata import fetch_metadata
 from core.video import fetch_video_resolutions, download_video
 from core.audio import fetch_audio_formats, download_audio
 from core.thumbnail import fetch_thumbnail_options, download_thumbnail
+from core.subtitles import fetch_subtitle_tracks, download_subtitles
 from core.validators import is_youtube_url, is_valid_target
 from core.rate_limit import RateLimiter
 from core.jobs import JobManager, QueueFullError
 from core.yt_helper import cookie_status, recent_errors
-from core import warp
+from core import keepalive, warp
 from core.errors import friendly_error
 import yt_dlp
 
@@ -51,6 +54,7 @@ async def lifespan(app):
     jobs.cleanup()
     jobs.start_janitor()
     warp.start_in_background()
+    keepalive.start()
     yield
 
 
@@ -74,6 +78,9 @@ app.add_middleware(
 class DownloadRequest(BaseModel):
     url: str
     target: str
+    # Optional clip, in seconds (video and audio only)
+    start: Optional[float] = None
+    end: Optional[float] = None
 
 
 def require_youtube_url(url: str):
@@ -98,6 +105,7 @@ def health_check():
         "cookies": cookie_status(),
         "proxy_configured": bool(os.getenv("YOUTUBE_PROXY")),
         "warp": {**warp.status, "active": bool(warp.proxy_url())},
+        "keep_alive": keepalive.status,
         "trust_proxy": os.getenv("TRUST_PROXY") == "1",
         "recent_youtube_errors": list(recent_errors),
     }
@@ -136,6 +144,10 @@ def get_audio_fmt(url: str):
 def get_thumb_res(url: str):
     return run_lookup("THUMBNAIL", fetch_thumbnail_options, url, "resolutions")
 
+@app.get("/api/subtitles", dependencies=[Depends(lookup_limit)])
+def get_subtitles(url: str):
+    return run_lookup("SUBTITLES", fetch_subtitle_tracks, url, "tracks")
+
 
 # ─── Downloads run as background jobs ───
 # POST /api/download/<kind>          -> {"task_id": ...} immediately
@@ -143,10 +155,22 @@ def get_thumb_res(url: str):
 # GET  /api/files/<id>               -> the file (deleted from the server once sent)
 
 DOWNLOADERS = {
-    "video": lambda url, target: lambda out_dir, hook: download_video(url, target, out_dir, hook),
-    "audio": lambda url, target: lambda out_dir, hook: download_audio(url, target, out_dir, hook),
-    "thumbnail": lambda url, target: lambda out_dir, hook: download_thumbnail(url, target, out_dir),
+    "video": lambda url, target, clip: lambda out_dir, hook: download_video(url, target, out_dir, hook, clip),
+    "audio": lambda url, target, clip: lambda out_dir, hook: download_audio(url, target, out_dir, hook, clip),
+    "thumbnail": lambda url, target, clip: lambda out_dir, hook: download_thumbnail(url, target, out_dir),
+    "subtitles": lambda url, target, clip: lambda out_dir, hook: download_subtitles(url, target, out_dir),
 }
+CLIPPABLE = ("video", "audio")
+
+
+def read_clip(kind, req):
+    if req.start is None and req.end is None:
+        return None
+    if kind not in CLIPPABLE:
+        raise HTTPException(status_code=400, detail="Only video and audio downloads can be clipped.")
+    if req.start is None or req.end is None or not 0 <= req.start < req.end:
+        raise HTTPException(status_code=400, detail="Pick a clip start time that's before the end time.")
+    return (req.start, req.end)
 
 @app.post("/api/download/{kind}", dependencies=[Depends(download_limit)])
 def start_download(kind: str, req: DownloadRequest):
@@ -156,8 +180,9 @@ def start_download(kind: str, req: DownloadRequest):
     target = req.target.strip()
     if not is_valid_target(kind, target):
         raise HTTPException(status_code=400, detail=f"Invalid {kind} option: '{target}'")
+    clip = read_clip(kind, req)
     try:
-        task_id = jobs.submit(kind, DOWNLOADERS[kind](url, target))
+        task_id = jobs.submit(kind, DOWNLOADERS[kind](url, target, clip))
     except QueueFullError as e:
         raise HTTPException(status_code=503, detail=str(e))
     print(f"⏳ [{kind.upper()} DOWNLOAD QUEUED] {target} → task {task_id[:8]}")

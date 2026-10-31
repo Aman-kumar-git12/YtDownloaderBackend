@@ -1,5 +1,5 @@
 import os
-from core.yt_helper import extract_info_safe, find_output_file
+from core.yt_helper import apply_clip, extract_info_safe, find_output_file, name_clip
 
 def fetch_video_resolutions(url):
     info = extract_info_safe(url, download=False)
@@ -34,7 +34,7 @@ def fetch_video_resolutions(url):
         "resolutions": resolutions
     }
 
-def download_video(url, resolution_str, out_dir, progress_hook=None):
+def download_video(url, resolution_str, out_dir, progress_hook=None, clip=None):
     # resolution_str should be something like "1080" or "1080p"
     resolution = int(resolution_str.lower().rstrip("p"))
 
@@ -48,6 +48,7 @@ def download_video(url, resolution_str, out_dir, progress_hook=None):
     }
     if progress_hook:
         extra['progress_hooks'] = [progress_hook]
+    apply_clip(url, extra, clip)
 
     extract_info_safe(url, download=True, extra_opts=extra)
-    return find_output_file(out_dir)
+    return name_clip(find_output_file(out_dir), clip)

@@ -1,5 +1,5 @@
 import os
-from core.yt_helper import extract_info_safe, find_output_file
+from core.yt_helper import apply_clip, extract_info_safe, find_output_file, name_clip
 
 # (format, description, approx KB per second of audio)
 AUDIO_FORMATS = [
@@ -30,18 +30,31 @@ def fetch_audio_formats(url):
         "details": details_dict
     }
 
-def download_audio(url, target_format, out_dir, progress_hook=None):
+# Formats that can carry title/artist tags and cover art
+TAGGABLE_FORMATS = ("mp3", "m4a", "flac")
+
+def download_audio(url, target_format, out_dir, progress_hook=None, clip=None):
+    target_format = target_format.lower()
+    postprocessors = [{
+        'key': 'FFmpegExtractAudio',
+        'preferredcodec': target_format,
+        'preferredquality': '192',
+    }]
     extra = {
         'format': 'bestaudio/best',
         'outtmpl': os.path.join(out_dir, '%(title).150B.%(ext)s'),
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': target_format.lower(),
-            'preferredquality': '192',
-        }],
+        'postprocessors': postprocessors,
     }
+    if target_format in TAGGABLE_FORMATS:
+        # Title/artist tags and the video thumbnail as cover art, so the file
+        # shows up properly in music apps
+        extra['writethumbnail'] = True
+        postprocessors.insert(0, {'key': 'FFmpegThumbnailsConvertor', 'format': 'jpg', 'when': 'before_dl'})
+        postprocessors.append({'key': 'FFmpegMetadata', 'add_metadata': True})
+        postprocessors.append({'key': 'EmbedThumbnail'})
     if progress_hook:
         extra['progress_hooks'] = [progress_hook]
+    apply_clip(url, extra, clip)
 
     extract_info_safe(url, download=True, extra_opts=extra)
-    return find_output_file(out_dir)
+    return name_clip(find_output_file(out_dir), clip)

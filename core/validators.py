@@ -7,6 +7,8 @@ THUMBNAIL_HOSTS = ("ytimg.com", "ggpht.com", "googleusercontent.com")
 AUDIO_FORMATS = ("mp3", "m4a", "wav", "flac", "aac")
 VIDEO_TARGET_RE = re.compile(r"^\d{2,4}p?$", re.IGNORECASE)
 THUMBNAIL_TARGET_RE = re.compile(r"^[\w-]{1,40}$")
+# "<language>:<manual|auto>:<srt|vtt>", e.g. "en:manual:srt" or "en-orig:auto:vtt"
+SUBTITLE_TARGET_RE = re.compile(r"^[\w-]{1,20}:(manual|auto):(srt|vtt)$")
 
 
 def _host_matches(url, allowed_domains):
@@ -37,4 +39,6 @@ def is_valid_target(kind, target):
         return target.lower() in AUDIO_FORMATS
     if kind == "thumbnail":
         return bool(THUMBNAIL_TARGET_RE.match(target))
+    if kind == "subtitles":
+        return bool(SUBTITLE_TARGET_RE.match(target))
     return False

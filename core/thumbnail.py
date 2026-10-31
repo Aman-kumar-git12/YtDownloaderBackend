@@ -2,6 +2,7 @@ import os
 import requests
 from core.yt_helper import extract_info_safe
 from core.validators import is_thumbnail_url
+from core.errors import UserFacingError
 
 MAX_THUMBNAIL_BYTES = 10 * 1024 * 1024
 IMAGE_EXTENSIONS = {'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/png': 'png'}
@@ -45,7 +46,7 @@ def download_thumbnail(video_url, target_res, out_dir):
     info = extract_info_safe(video_url, download=False)
     thumb_url = get_thumbnail_urls(info).get(target_res)
     if not thumb_url:
-        raise ValueError(f"Thumbnail size '{target_res}' is not available for this video")
+        raise UserFacingError(f"The {target_res} thumbnail isn't available for this video.")
 
     with requests.get(thumb_url, timeout=20, stream=True, allow_redirects=False) as response:
         if response.status_code != 200:

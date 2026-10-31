@@ -45,6 +45,7 @@ def fetch_metadata(url):
         "subscribers": info.get('channel_follower_count'),
         "upload_date": format_upload_date(info.get('upload_date')),
         "duration": format_duration(info.get('duration')),
+        "duration_seconds": int(info.get('duration') or 0),
         "views": info.get('view_count'),
         "likes": info.get('like_count'),
         "comments": info.get('comment_count'),

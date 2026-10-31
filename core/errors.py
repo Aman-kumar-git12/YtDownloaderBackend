@@ -1,3 +1,7 @@
+class UserFacingError(ValueError):
+    """An error whose message is already written for the user."""
+
+
 # Map raw yt-dlp errors to messages a user can act on. Order matters: more
 # specific phrases come first ("confirm your age" also contains "Sign in to confirm").
 FRIENDLY_ERRORS = [
@@ -19,6 +23,8 @@ FRIENDLY_ERRORS = [
 
 
 def friendly_error(error):
+    if isinstance(error, UserFacingError):
+        return str(error)
     message = str(error).lower()
     for phrase, friendly in FRIENDLY_ERRORS:
         if phrase.lower() in message:

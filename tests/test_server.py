@@ -23,7 +23,7 @@ def test_rejects_invalid_targets(client):
 
 
 def test_download_flow_serves_file_once(client, monkeypatch):
-    def fake_download(url, target, out_dir, hook):
+    def fake_download(url, target, out_dir, hook, clip=None):
         path = os.path.join(out_dir, f"My Video_{target}.mp4")
         with open(path, "wb") as f:
             f.write(b"video-bytes")
