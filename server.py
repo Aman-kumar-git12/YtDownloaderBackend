@@ -55,7 +55,8 @@ app = FastAPI(title="YouTube Downloader API", lifespan=lifespan)
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 
 # Support comma-separated origins for multiple frontends (e.g. dev + prod)
-allowed_origins = [origin.strip() for origin in FRONTEND_URL.split(",") if origin.strip()]
+# (browsers send the origin without a trailing slash, so strip any from the env value)
+allowed_origins = [origin.strip().rstrip("/") for origin in FRONTEND_URL.split(",") if origin.strip()]
 
 app.add_middleware(
     CORSMiddleware,
