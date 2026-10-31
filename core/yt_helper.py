@@ -1,4 +1,5 @@
 import os
+import tempfile
 import threading
 import time
 from collections import deque
@@ -13,6 +14,32 @@ _info_cache = {}
 _info_cache_lock = threading.Lock()
 
 TEMP_SUFFIXES = ('.part', '.ytdl', '.temp', '.tmp')
+
+_cookie_copy = None
+_cookie_lock = threading.Lock()
+
+def _writable_cookie_file():
+    """yt-dlp writes refreshed cookies back to the cookie file, which fails on read-only
+    mounts like Render's /etc/secrets. Copy the configured cookies (YOUTUBE_COOKIES_TEXT or
+    YOUTUBE_COOKIE_FILE) to a temp file once per process and let yt-dlp keep it updated."""
+    global _cookie_copy
+    with _cookie_lock:
+        if _cookie_copy and os.path.exists(_cookie_copy):
+            return _cookie_copy
+
+        content = os.getenv('YOUTUBE_COOKIES_TEXT')
+        if not content:
+            path = os.getenv('YOUTUBE_COOKIE_FILE', os.path.join(os.path.dirname(__file__), 'youtube_cookies.txt'))
+            if not (os.path.exists(path) and os.path.getsize(path) > 10):
+                return None
+            with open(path) as f:
+                content = f.read()
+
+        dest = os.path.join(tempfile.gettempdir(), 'yt_dlp_cookies.txt')
+        with open(dest, 'w') as f:
+            f.write(content.replace('\r\n', '\n'))
+        _cookie_copy = dest
+        return dest
 
 def get_base_ydl_opts(extra_opts=None, use_cookies=True):
     opts = {
@@ -33,24 +60,10 @@ def get_base_ydl_opts(extra_opts=None, use_cookies=True):
     if proxy:
         opts['proxy'] = proxy
 
-    # Support inline cookies from environment variable (e.g. YOUTUBE_COOKIES_TEXT)
-    cookies_text = os.getenv('YOUTUBE_COOKIES_TEXT')
-    cookie_path = os.getenv(
-        'YOUTUBE_COOKIE_FILE',
-        os.path.join(os.path.dirname(__file__), 'youtube_cookies.txt'),
-    )
-
     if use_cookies:
-        if cookies_text:
-            env_cookie_file = os.path.join(os.path.dirname(__file__), 'env_cookies.txt')
-            try:
-                with open(env_cookie_file, 'w') as f:
-                    f.write(cookies_text)
-                opts['cookiefile'] = env_cookie_file
-            except Exception:
-                pass
-        elif os.path.exists(cookie_path) and os.path.getsize(cookie_path) > 10:
-            opts['cookiefile'] = cookie_path
+        cookie_file = _writable_cookie_file()
+        if cookie_file:
+            opts['cookiefile'] = cookie_file
 
     if extra_opts:
         opts.update(extra_opts)

@@ -1,3 +1,4 @@
+import os
 from core import metadata
 
 
@@ -61,3 +62,20 @@ def test_only_the_video_is_fetched_from_mix_links():
     from core.yt_helper import get_base_ydl_opts
 
     assert get_base_ydl_opts(use_cookies=False)["noplaylist"] is True
+
+
+def test_read_only_cookie_file_is_copied_somewhere_writable(tmp_path, monkeypatch):
+    from core import yt_helper
+
+    secret = tmp_path / "youtube_cookies.txt"
+    secret.write_text("# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tSID\tabc\n")
+    secret.chmod(0o444)
+    monkeypatch.delenv("YOUTUBE_COOKIES_TEXT", raising=False)
+    monkeypatch.setenv("YOUTUBE_COOKIE_FILE", str(secret))
+    monkeypatch.setattr(yt_helper, "_cookie_copy", None)
+
+    cookiefile = yt_helper.get_base_ydl_opts()["cookiefile"]
+
+    assert cookiefile != str(secret)
+    assert os.access(cookiefile, os.W_OK)
+    assert open(cookiefile).read() == secret.read_text()
