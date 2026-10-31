@@ -17,6 +17,10 @@ def get_base_ydl_opts(extra_opts=None, use_cookies=True):
         'quiet': True,
         'no_warnings': True,
         'noprogress': True,
+        # A watch link copied from a Mix/playlist carries "&list=..."; only fetch the video.
+        'noplaylist': True,
+        # If the link is a playlist/channel, list it cheaply so it can be rejected below.
+        'extract_flat': 'in_playlist',
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
         }
@@ -59,7 +63,13 @@ def extract_info_safe(url, download=False, extra_opts=None):
             if entry and time.time() - entry[0] < INFO_CACHE_TTL:
                 return entry[1]
 
+    if download:
+        # Check what the link points to before downloading anything (usually cached)
+        extract_info_safe(url)
+
     info = _extract_with_fallbacks(url, download, extra_opts)
+    if info and info.get('_type') in ('playlist', 'multi_video'):
+        raise ValueError("Playlists and channels aren't supported. Please paste a link to a single video.")
 
     if cacheable and info:
         with _info_cache_lock:

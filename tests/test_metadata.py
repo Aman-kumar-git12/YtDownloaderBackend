@@ -42,3 +42,22 @@ def test_keeps_zero_counts_and_formats_values(monkeypatch):
 def test_format_upload_date_rejects_garbage():
     assert metadata.format_upload_date("2024") is None
     assert metadata.format_upload_date("abcdefgh") is None
+
+
+def test_playlist_links_are_rejected(monkeypatch):
+    from core import yt_helper
+
+    monkeypatch.setattr(yt_helper, "_extract_with_fallbacks",
+                        lambda url, download, extra_opts: {"_type": "playlist", "entries": []})
+    try:
+        yt_helper.extract_info_safe("https://www.youtube.com/playlist?list=PL123")
+    except ValueError as e:
+        assert "single video" in str(e)
+    else:
+        raise AssertionError("playlist was not rejected")
+
+
+def test_only_the_video_is_fetched_from_mix_links():
+    from core.yt_helper import get_base_ydl_opts
+
+    assert get_base_ydl_opts(use_cookies=False)["noplaylist"] is True
