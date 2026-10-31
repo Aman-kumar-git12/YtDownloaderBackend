@@ -144,3 +144,21 @@ def test_music_transcripts_do_not_quote_lyrics():
     lines = [(0, 10, "some words sung here"), (10, 20, "more words")]
     result = analyse_transcript({"title": "Song", "duration": 20, "categories": ["Music"]}, lines)
     assert result["hook"] == ""
+
+
+def test_transcript_tries_the_next_track_and_reports_blocking(monkeypatch):
+    from core import transcript_insights as ti
+    info = {"title": "Talk", "duration": 60, "language": "en",
+            "subtitles": {"en": [{"ext": "json3", "url": "u1"}], "fr": [{"ext": "json3", "url": "u2"}]}}
+    monkeypatch.setattr(ti, "extract_info_safe", lambda url: info)
+    good = '{"events":[{"tStartMs":0,"dDurationMs":60000,"segs":[{"utf8":"hello there friends"}]}]}'
+
+    def fetch(url):
+        if url == "u1":
+            raise RuntimeError("HTTP Error 429")
+        return good
+    monkeypatch.setattr(ti, "fetch_url_text", fetch)
+    assert ti._build("x")["word_count"] == 3
+
+    monkeypatch.setattr(ti, "fetch_url_text", lambda url: (_ for _ in ()).throw(RuntimeError("403")))
+    assert ti._build("x") == {"available": False, "reason": "blocked"}

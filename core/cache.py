@@ -11,12 +11,14 @@ class TTLCache:
         self._data = {}
         self._lock = threading.Lock()
 
-    def get_or_compute(self, key, compute):
+    def get_or_compute(self, key, compute, should_cache=lambda value: True):
         with self._lock:
             entry = self._data.get(key)
             if entry and time.time() - entry[0] < self.ttl:
                 return entry[1]
         value = compute()
+        if not should_cache(value):
+            return value
         with self._lock:
             if len(self._data) >= self.max:
                 del self._data[min(self._data, key=lambda k: self._data[k][0])]

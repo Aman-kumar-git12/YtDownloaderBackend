@@ -1,28 +1,37 @@
 """What the video says: speaking pace, topics, how strong the opening hook is."""
 import json
+import time
 
 from core.cache import TTLCache
 from core.text_tools import top_keywords, words
-from core.yt_helper import extract_info_safe, fetch_url_text
+from core.yt_helper import extract_info_safe, fetch_url_text, recent_errors
 
 _cache = TTLCache(ttl_seconds=1800, max_entries=50)
 HOOK_SECONDS = 30
 
 
-def _pick_track(info):
-    """Prefer creator captions in the video's language, then the original auto captions."""
+def _caption_tracks(info):
+    """Caption tracks to try, best first: creator captions in the video's language,
+    then the original automatic captions. -> [(source, language, json3_url)]"""
     lang = (info.get("language") or "en").split("-")[0]
     manual = info.get("subtitles") or {}
     auto = info.get("automatic_captions") or {}
+    found, seen = [], set()
     for source, tracks, keys in (
         ("creator", manual, [k for k in manual if k.split("-")[0] == lang] + list(manual)),
         ("automatic", auto, [k for k in auto if k.endswith("-orig")] + [k for k in auto if k.split("-")[0] == lang]),
     ):
         for key in keys:
             fmt = next((f for f in tracks.get(key) or [] if f.get("ext") == "json3"), None)
-            if fmt:
-                return source, key, fmt["url"]
-    return None
+            if fmt and fmt["url"] not in seen:
+                seen.add(fmt["url"])
+                found.append((source, key, fmt["url"]))
+    return found
+
+
+def _pick_track(info):
+    tracks = _caption_tracks(info)
+    return tracks[0] if tracks else None
 
 
 def _parse_json3(raw):
@@ -37,19 +46,32 @@ def _parse_json3(raw):
 
 
 def transcript_insights(url):
-    return _cache.get_or_compute(url, lambda: _build(url))
+    # A blocked fetch is temporary, so don't remember it
+    return _cache.get_or_compute(url, lambda: _build(url), should_cache=lambda r: r.get("reason") != "blocked")
+
+
+MAX_TRACK_ATTEMPTS = 3
 
 
 def _build(url):
     info = extract_info_safe(url)
-    track = _pick_track(info)
-    if not track:
-        return {"available": False}
-    source, lang, track_url = track
-    lines = _parse_json3(fetch_url_text(track_url))
-    if not lines:
-        return {"available": False}
-    return analyse(info, lines, source, lang)
+    tracks = _caption_tracks(info)
+    if not tracks:
+        return {"available": False, "reason": "none"}
+    last_error = None
+    for source, lang, track_url in tracks[:MAX_TRACK_ATTEMPTS]:
+        try:
+            lines = _parse_json3(fetch_url_text(track_url))
+        except Exception as e:  # blocked, rate limited, or not JSON
+            last_error = e
+            recent_errors.append({"time": time.strftime('%H:%M:%S'), "attempt": f"captions {lang}", "error": str(e)[:300]})
+            continue
+        if lines:
+            return analyse(info, lines, source, lang)
+    if last_error:
+        print(f"⚠️ [TRANSCRIPT] captions couldn't be fetched: {last_error}")
+        return {"available": False, "reason": "blocked"}
+    return {"available": False, "reason": "empty"}
 
 
 def analyse(info, lines, source="automatic", lang=None):
