@@ -100,6 +100,9 @@ def _start():
                     trace = ydl.urlopen("https://www.cloudflare.com/cdn-cgi/trace").read().decode()
                 if "warp=on" in trace or "warp=plus" in trace:
                     status["state"] = "running"
+                    # Which Cloudflare location/address YouTube sees (shown on /health)
+                    fields = dict(line.split("=", 1) for line in trace.splitlines() if "=" in line)
+                    status["exit"] = {"location": fields.get("colo"), "country": fields.get("loc"), "ip": fields.get("ip")}
                     print("🌐 [WARP] Proxy running — YouTube requests now go through Cloudflare WARP")
                     return
                 last_err = "connected but WARP is not active"
