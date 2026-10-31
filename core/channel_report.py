@@ -100,6 +100,8 @@ def _build(info):
             "views_per_subscriber": round(median / subscribers, 3) if median and subscribers else None,
             "top": top[:3],
             "breakouts": breakouts,
+            # Every recent upload's views, for the "this video vs the channel" dot plot
+            "views": [{"id": v["id"], "views": v["views"]} for v in long_videos if v["views"] is not None],
             "oldest_timestamp": min((v["timestamp"] for v in long_videos if v.get("timestamp")), default=None),
         },
         "upload_rhythm": _upload_rhythm(long_videos, exact=bool(api_uploads)),
