@@ -138,3 +138,9 @@ def test_insight_endpoint_returns_data(client, monkeypatch):
     monkeypatch.setattr(server, "video_insights", lambda url: {"title": "ok"})
     r = client.get("/api/insights", params={"url": "https://youtu.be/abc"})
     assert r.status_code == 200 and r.json()["data"]["title"] == "ok"
+
+
+def test_music_transcripts_do_not_quote_lyrics():
+    lines = [(0, 10, "some words sung here"), (10, 20, "more words")]
+    result = analyse_transcript({"title": "Song", "duration": 20, "categories": ["Music"]}, lines)
+    assert result["hook"] == ""

@@ -69,7 +69,9 @@ def analyse(info, lines, source="automatic", lang=None):
     speech = min(speech, duration) if duration else speech
 
     wpm = round(len(word_list) / (speech / 60)) if speech > 30 else None
-    hook = " ".join(t for s, _, t in lines if s < HOOK_SECONDS)
+    # Song captions are lyrics; don't republish them as the "hook" quote
+    is_music = "Music" in (info.get("categories") or [])
+    hook = "" if is_music else " ".join(t for s, _, t in lines if s < HOOK_SECONDS)
     first_minute = set(words(" ".join(t for s, _, t in lines if s < 60)))
     title_words = [w for w in words(info.get("title") or "") if len(w) > 3]
     promised = [w for w in title_words if w in first_minute]
