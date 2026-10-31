@@ -15,6 +15,8 @@ def _fetch_comments(url):
         'extractor_args': {'youtube': {'max_comments': [str(MAX_COMMENTS), str(MAX_COMMENTS), '0', '0'],
                                        'comment_sort': ['top']}},
     })
+    # With getcomments, yt-dlp replaces comment_count with the number it fetched; use the real total
+    info = {**info, 'comment_count': extract_info_safe(url).get('comment_count')}
     return info, [c for c in (info.get('comments') or []) if c.get('text')]
 
 
