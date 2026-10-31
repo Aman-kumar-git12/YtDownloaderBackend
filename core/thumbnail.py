@@ -36,6 +36,7 @@ def fetch_thumbnail_options(url):
     return {
         "title": info.get('title') or 'Unknown Title',
         "resolutions": qualities_dict,
+        "previews": get_thumbnail_urls(info),
     }
 
 def download_thumbnail(video_url, target_res, out_dir):

@@ -29,6 +29,7 @@ from core.rate_limit import RateLimiter
 from core.jobs import JobManager, QueueFullError
 from core.yt_helper import cookie_status, recent_errors
 from core import warp
+from core.errors import friendly_error
 import yt_dlp
 
 DOWNLOADS_DIR = os.path.join(os.path.dirname(__file__), 'downloads')
@@ -41,6 +42,7 @@ jobs = JobManager(
     max_workers=int(os.getenv("MAX_CONCURRENT_DOWNLOADS", 2)),
     max_pending=int(os.getenv("MAX_PENDING_DOWNLOADS", 10)),
     ttl_seconds=int(os.getenv("FILE_TTL_SECONDS", 900)),
+    error_formatter=friendly_error,
 )
 
 
@@ -109,7 +111,7 @@ def run_lookup(label, fetch, url, count_key):
         return {"success": True, "data": data}
     except Exception as e:
         print(f"❌ [{label} ERROR] {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=friendly_error(e))
 
 @app.get("/api/metadata", dependencies=[Depends(lookup_limit)])
 def get_metadata(url: str):
@@ -120,7 +122,7 @@ def get_metadata(url: str):
         return {"success": True, "data": data}
     except Exception as e:
         print(f"❌ [METADATA ERROR] {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=friendly_error(e))
 
 @app.get("/api/video/resolutions", dependencies=[Depends(lookup_limit)])
 def get_video_res(url: str):

@@ -31,7 +31,8 @@ def test_successful_job_and_release(tmp_path):
 
     assert len(task_id) == 32
     assert job["status"] == "completed" and job["filename"] == "song.mp3"
-    assert set(jobs.public_view(task_id)) == {"status", "percent", "speed", "eta", "filename", "error"}
+    assert set(jobs.public_view(task_id)) == {"status", "stage", "percent", "speed", "eta", "filename", "error"}
+    assert job["stage"] == "video"
 
     jobs.release(task_id)
     assert jobs.get(task_id) is None

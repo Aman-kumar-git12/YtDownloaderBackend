@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 TASK_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 ACTIVE_STATUSES = ("queued", "downloading", "processing")
-PUBLIC_FIELDS = ("status", "percent", "speed", "eta", "filename", "error")
+PUBLIC_FIELDS = ("status", "stage", "percent", "speed", "eta", "filename", "error")
 
 
 class QueueFullError(Exception):
@@ -19,8 +19,9 @@ class JobManager:
     """Runs downloads in background threads. Each job writes into its own
     downloads/<task_id>/ folder, which is deleted once the file is served or expires."""
 
-    def __init__(self, root_dir, max_workers=2, max_pending=10, ttl_seconds=900):
+    def __init__(self, root_dir, max_workers=2, max_pending=10, ttl_seconds=900, error_formatter=str):
         self.root_dir = root_dir
+        self.error_formatter = error_formatter
         self.max_pending = max_pending
         self.ttl = ttl_seconds
         self._jobs = {}
@@ -40,6 +41,7 @@ class JobManager:
             self._jobs[task_id] = {
                 "kind": kind,
                 "status": "queued",
+                "stage": None,
                 "percent": 0,
                 "speed": "",
                 "eta": "",
@@ -63,7 +65,7 @@ class JobManager:
             print(f"🎉 [JOB {task_id[:8]}] Ready: '{os.path.basename(path)}'")
         except Exception as e:
             shutil.rmtree(out_dir, ignore_errors=True)
-            self.update(task_id, status="error", error=str(e))
+            self.update(task_id, status="error", error=self.error_formatter(e))
             print(f"❌ [JOB {task_id[:8]}] {e}")
 
     def _progress_hook(self, task_id):
@@ -74,9 +76,12 @@ class JobManager:
                 downloaded = d.get('downloaded_bytes') or 0
                 speed = d.get('speed') or 0
                 eta = d.get('eta')
+                # A video download fetches the video stream, then the audio stream
+                is_audio = (d.get('info_dict') or {}).get('vcodec') == 'none'
                 self.update(
                     task_id,
                     status="downloading",
+                    stage="audio" if is_audio else "video",
                     percent=round(downloaded / total * 100, 1) if total > 0 else 0,
                     speed=f"{speed / (1024*1024):.1f} MB/s" if speed > 0 else "",
                     eta=f"{eta}s" if eta is not None else "",
