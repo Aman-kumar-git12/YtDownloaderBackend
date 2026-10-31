@@ -28,6 +28,7 @@ from core.validators import is_youtube_url, is_valid_target
 from core.rate_limit import RateLimiter
 from core.jobs import JobManager, QueueFullError
 from core.yt_helper import cookie_status, recent_errors
+from core import warp
 import yt_dlp
 
 DOWNLOADS_DIR = os.path.join(os.path.dirname(__file__), 'downloads')
@@ -47,6 +48,7 @@ jobs = JobManager(
 async def lifespan(app):
     jobs.cleanup()
     jobs.start_janitor()
+    warp.start_in_background()
     yield
 
 
@@ -93,6 +95,7 @@ def health_check():
         "dependencies": dependencies,
         "cookies": cookie_status(),
         "proxy_configured": bool(os.getenv("YOUTUBE_PROXY")),
+        "warp": {**warp.status, "active": bool(warp.proxy_url())},
         "trust_proxy": os.getenv("TRUST_PROXY") == "1",
         "recent_youtube_errors": list(recent_errors),
     }

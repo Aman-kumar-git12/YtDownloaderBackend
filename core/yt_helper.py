@@ -6,6 +6,8 @@ from collections import deque
 
 import yt_dlp
 
+from core import warp
+
 # Metadata lookups are cached so switching tabs (or starting a download) doesn't
 # re-run a slow yt-dlp extraction and trigger YouTube's bot checks.
 INFO_CACHE_TTL = int(os.getenv('INFO_CACHE_TTL_SECONDS', 300))
@@ -56,7 +58,7 @@ def get_base_ydl_opts(extra_opts=None, use_cookies=True):
     }
 
     # Support Proxy via environment variable (e.g. YOUTUBE_PROXY or HTTP_PROXY)
-    proxy = os.getenv('YOUTUBE_PROXY') or os.getenv('HTTP_PROXY') or os.getenv('HTTPS_PROXY')
+    proxy = os.getenv('YOUTUBE_PROXY') or os.getenv('HTTP_PROXY') or os.getenv('HTTPS_PROXY') or warp.proxy_url()
     if proxy:
         opts['proxy'] = proxy
 
