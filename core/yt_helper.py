@@ -189,3 +189,19 @@ def name_clip(path, clip):
     new_path = f"{base} ({_clock(clip[0])}-{_clock(clip[1])}){ext}"
     os.rename(path, new_path)
     return new_path
+
+
+def extract_tab(url, limit, approximate_dates=False):
+    """List a channel tab (videos/shorts) cheaply: titles, views and durations, no per-video requests."""
+    opts = get_base_ydl_opts({'extract_flat': True, 'noplaylist': False, 'playlistend': limit})
+    if approximate_dates:
+        opts['extractor_args'] = {'youtubetab': {'approximate_date': ['']}}
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+    return info, [e for e in (info.get('entries') or []) if e]
+
+
+def fetch_url_text(url):
+    """GET a YouTube-hosted URL (e.g. a caption track) through the same proxy/cookies as yt-dlp."""
+    with yt_dlp.YoutubeDL(get_base_ydl_opts()) as ydl:
+        return ydl.urlopen(url).read().decode('utf-8', 'replace')

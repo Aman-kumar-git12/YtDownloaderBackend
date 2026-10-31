@@ -31,7 +31,11 @@ from core.validators import is_youtube_url, is_valid_target
 from core.rate_limit import RateLimiter
 from core.jobs import JobManager, QueueFullError
 from core.yt_helper import cookie_status, recent_errors
-from core import keepalive, warp
+from core import keepalive, warp, ytapi
+from core.insights import video_insights
+from core.channel_report import channel_report
+from core.comment_insights import comment_insights
+from core.transcript_insights import transcript_insights
 from core.errors import friendly_error
 import yt_dlp
 
@@ -39,6 +43,8 @@ DOWNLOADS_DIR = os.path.join(os.path.dirname(__file__), 'downloads')
 
 # ─── Limits (all overridable from .env) ───
 lookup_limit = RateLimiter(int(os.getenv("RATE_LIMIT_LOOKUPS_PER_MINUTE", 30)), 60)
+# Comments are the slowest lookup (one request per 20 comments), so they get a tighter limit
+heavy_limit = RateLimiter(int(os.getenv("RATE_LIMIT_HEAVY_PER_MINUTE", 8)), 60)
 download_limit = RateLimiter(int(os.getenv("RATE_LIMIT_DOWNLOADS_PER_HOUR", 20)), 3600)
 jobs = JobManager(
     DOWNLOADS_DIR,
@@ -107,6 +113,7 @@ def health_check():
         "warp": {**warp.status, "active": bool(warp.proxy_url())},
         "keep_alive": keepalive.status,
         "trust_proxy": os.getenv("TRUST_PROXY") == "1",
+        "youtube_data_api": ytapi.enabled(),
         "recent_youtube_errors": list(recent_errors),
     }
 
@@ -147,6 +154,35 @@ def get_thumb_res(url: str):
 @app.get("/api/subtitles", dependencies=[Depends(lookup_limit)])
 def get_subtitles(url: str):
     return run_lookup("SUBTITLES", fetch_subtitle_tracks, url, "tracks")
+
+
+# ─── Insights (estimates and analysis from public data) ───
+
+def run_insight(label, build, url):
+    url = require_youtube_url(url)
+    try:
+        data = build(url)
+        print(f"📊 [{label}] {url}")
+        return {"success": True, "data": data}
+    except Exception as e:
+        print(f"❌ [{label} ERROR] {e}")
+        raise HTTPException(status_code=500, detail=friendly_error(e))
+
+@app.get("/api/insights", dependencies=[Depends(lookup_limit)])
+def get_insights(url: str):
+    return run_insight("INSIGHTS", video_insights, url)
+
+@app.get("/api/insights/channel", dependencies=[Depends(lookup_limit)])
+def get_channel_insights(url: str):
+    return run_insight("CHANNEL INSIGHTS", channel_report, url)
+
+@app.get("/api/insights/transcript", dependencies=[Depends(lookup_limit)])
+def get_transcript_insights(url: str):
+    return run_insight("TRANSCRIPT INSIGHTS", transcript_insights, url)
+
+@app.get("/api/insights/comments", dependencies=[Depends(heavy_limit)])
+def get_comment_insights(url: str):
+    return run_insight("COMMENT INSIGHTS", comment_insights, url)
 
 
 # ─── Downloads run as background jobs ───

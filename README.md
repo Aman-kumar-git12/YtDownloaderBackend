@@ -43,6 +43,21 @@ docker run -p 8001:8001 --env-file .env yt-backend
 | GET | `/api/download/progress/{task_id}` | `status` (`queued` → `downloading` → `processing` → `completed` / `error`), `percent`, `speed`, `filename`, `error` |
 | GET | `/api/files/{task_id}` | The finished file. **Deleted from the server after it's sent.** |
 
+### Insights
+
+| Method | Path | Description |
+| --- | --- | --- |
+| GET | `/api/insights?url=` | Estimated earnings (range, per day, next 30 days, sponsor deal), 30-day view forecast, engagement and approval (estimated dislikes), most-replayed moments, SEO checklist, SponsorBlock segments, technical facts |
+| GET | `/api/insights/channel?url=` | How the video compares with the channel's last 30 uploads (outlier score), breakouts, upload rhythm, views by video length, Shorts vs long videos; with a Data API key also channel age, country, total views, topics and best posting day |
+| GET | `/api/insights/comments?url=` | Mood, top questions, recurring words, top comment and likely audience languages from the top 150 comments (slow: ~10 s, limited to 8/min) |
+| GET | `/api/insights/transcript?url=` | Speaking pace, talking time, topics, the first 30 seconds and whether it repeats the title |
+
+**Everything about money and audience countries is an estimate.** YouTube only shows real revenue and per-country views to the channel owner. The web app's "Your real numbers" card lets owners sign in with Google to see their own (see the frontend README).
+
+Earnings use typical creator RPM by category (higher for money/business topics), adjusted for the channel's country (or the spoken language), Shorts, video length (mid-rolls at 8+ min) and made-for-kids. The forecast assumes lifetime views grow like `t^a` with `a` between 0.25 and 0.5.
+
+Optional: set `YOUTUBE_API_KEY` (free, 10,000 units a day; each channel report costs about 3) for channel creation date, country, topics, made-for-kids and exact posting times. Create one at https://console.cloud.google.com → APIs & Services → enable **YouTube Data API v3** → Credentials → API key.
+
 Downloads run as background jobs, so long videos don't hit proxy request timeouts: start a job, poll progress, then fetch the file. `target` is a resolution like `720p`, an audio format like `mp3`, a thumbnail size like `1280x720`, or a subtitle track like `en:manual:srt` / `en-orig:auto:vtt`. MP3, M4A and FLAC downloads get title/artist tags and the thumbnail as cover art.
 
 ## Keep-awake on Render's free plan

@@ -15,4 +15,5 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "jobs", JobManager(str(tmp_path), max_workers=1, max_pending=2))
     server.lookup_limit.reset()
     server.download_limit.reset()
+    server.heavy_limit.reset()
     return TestClient(server.app)
