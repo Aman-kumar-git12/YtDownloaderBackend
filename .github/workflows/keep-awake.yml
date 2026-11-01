@@ -1,11 +1,11 @@
 # Render's free plan puts the server to sleep after ~15 minutes without requests,
-# and waking it takes up to a minute. Ping /health every 10 minutes so Viewlens stays fast.
+# and waking it takes up to a minute. Ping /health once an hour.
 # Note: GitHub pauses scheduled workflows after 60 days with no commits; re-enable it in the Actions tab.
 name: Keep server awake
 
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "0 * * * *"
   workflow_dispatch:
 
 jobs:
